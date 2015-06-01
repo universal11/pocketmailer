@@ -6,6 +6,7 @@
 
 package pocketmailer;
 import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import com.jcraft.jsch.*;
 import com.sun.org.apache.xerces.internal.impl.dv.util.Base64;
 import de.agitos.dkim.Canonicalization;
@@ -20,6 +21,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.reflect.Type;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.URL;
@@ -38,7 +40,10 @@ import javax.mail.SendFailedException;
 import javax.mail.Transport;
 import javax.mail.internet.InternetAddress;
 import javax.mail.internet.MimeMessage;
+import pocketmailer.models.Campaign;
+import pocketmailer.models.EmailProvider;
 import pocketmailer.models.EmailSubscriber;
+import pocketmailer.models.MessengerSetting;
 
 /**
  *
@@ -50,6 +55,8 @@ public class PocketMailSession {
     private String remotePassword = "";
     private String remoteHostIPAddress = "";
     private Session sshSession = null;
+    private int limit = 0;
+    private int seedEvery = 0;
     private boolean doTest = false;
     public static final String KEY = "jcsMjAsNjY4LDgzNCIgc2hhcGU9InJlY3QiI";
     public static final String HOST = "universalmessenger.net";
@@ -60,11 +67,13 @@ public class PocketMailSession {
         
     }
     
-    public void init(String remoteHost, String remoteUser, String remotePassword, boolean doTest) throws UnknownHostException{
+    public void init(String remoteHost, String remoteUser, String remotePassword, int limit, int seedEvery, boolean doTest) throws UnknownHostException{
         this.remoteHost = remoteHost;
         this.remoteUser = remoteUser;
         this.remotePassword = remotePassword;
         this.remoteHostIPAddress = InetAddress.getByName(this.remoteHost).getHostAddress();
+        this.limit = limit;
+        this.seedEvery = seedEvery;
         this.doTest = doTest;
     }
     
@@ -73,7 +82,13 @@ public class PocketMailSession {
         System.out.println("Remote Host IP: " + this.remoteHostIPAddress);
         System.out.println("Remote User:" + this.remoteUser);
         System.out.println("Remote Password:" + this.remotePassword);
+        System.out.println("Limit:" + this.limit);
+        System.out.println("Seed Every:" + this.seedEvery);
         System.out.println("Mode: " + ( (this.doTest) ? "Test" : "Normal" ));
+    }
+    
+    public void deploy(){
+        
     }
     
     public void start() throws JSchException, IOException, Exception{
@@ -84,6 +99,10 @@ public class PocketMailSession {
         
         
         //process
+        
+        this.installBind();
+        this.configureBind();
+        
         this.installPostfix();
         this.configurePostfix();
        
@@ -92,7 +111,8 @@ public class PocketMailSession {
         this.configureOpenDKIM();
         
         this.pauseQueue();
-        this.prepareMessage();
+        this.loadQueue();
+        //this.sendMessage();
         this.resumeQueue();
         
         
@@ -161,6 +181,61 @@ public class PocketMailSession {
         return dkimKey;
     }
     
+    public String getBindDefinition() throws IOException{
+        String[] hostParts = this.remoteHostIPAddress.split("\\.");
+        String hostInReverseOrder = hostParts[3] + "." + hostParts[2] + "." + hostParts[1] + "." + hostParts[0];
+        String definitionTemplate = this.readFile("bind-definition-template");
+        definitionTemplate = definitionTemplate.replace("[#hostname#]", this.remoteHost);
+        definitionTemplate = definitionTemplate.replace("[#host#]", this.remoteHostIPAddress);
+        definitionTemplate = definitionTemplate.replace("[#host_in_reverse_order#]", hostInReverseOrder);
+        return definitionTemplate;
+        
+    }
+    
+    public String getBindZone() throws IOException{
+        String[] hostParts = this.remoteHostIPAddress.split("\\.");
+        String hostInReverseOrder = hostParts[3] + "." + hostParts[2] + "." + hostParts[1] + "." + hostParts[0];
+        String zoneTemplate = this.readFile("bind-zone-template");
+        zoneTemplate = zoneTemplate.replace("[#hostname#]", this.remoteHost);
+        zoneTemplate = zoneTemplate.replace("[#host#]", this.remoteHostIPAddress);
+        zoneTemplate = zoneTemplate.replace("[#host_in_reverse_order#]", hostInReverseOrder);
+        return zoneTemplate;
+        
+    }
+    
+    public String getBindReverseZone() throws IOException{
+        String[] hostParts = this.remoteHostIPAddress.split("\\.");
+        String hostInReverseOrder = hostParts[3] + "." + hostParts[2] + "." + hostParts[1] + "." + hostParts[0];
+        String zoneTemplate = this.readFile("bind-reverse-zone-template");
+        zoneTemplate = zoneTemplate.replace("[#hostname#]", this.remoteHost);
+        zoneTemplate = zoneTemplate.replace("[#host#]", this.remoteHostIPAddress);
+        zoneTemplate = zoneTemplate.replace("[#host_in_reverse_order#]", hostInReverseOrder);
+        return zoneTemplate;
+        
+    }
+    
+    public void configureBind() throws IOException, JSchException{
+        String configData = this.readFile("named.conf.local");
+        configData += "\ninclude \"/etc/bind/definitions/" + this.remoteHostIPAddress + "\";";
+        
+        String zoneData = this.getBindZone();
+        String reverseZoneData = this.getBindReverseZone();
+        String definitionData = this.getBindDefinition();
+        String optionData = this.getBindOptions();
+        
+        this.sendSSHCommand("rm -rf /etc/bind/definitions; rm -rf /etc/bind/zones; mkdir -p /etc/bind/definitions; mkdir -p /etc/bind/zones; echo -e '" + optionData + "' > /etc/bind/named.conf.options; echo -e '" + configData + "' > /etc/bind/named.conf.local; echo '" + definitionData + "' > /etc/bind/definitions/" + this.remoteHostIPAddress + "; echo '" + zoneData + "' > /etc/bind/zones/" + this.remoteHostIPAddress + ".db; cat /etc/opendkim/keys/mail.txt >> /etc/bind/zones/" + this.remoteHostIPAddress + ".db; echo '" + reverseZoneData + "' > /etc/bind/zones/" + this.remoteHostIPAddress + ".in-addr.arpa; service bind9 restart;echo -e \"search " + this.remoteHost +"\nnameserver\" " + this.remoteHostIPAddress + " > /etc/resolv.conf;");
+    }
+    
+    public String getBindOptions() throws IOException{
+        return this.readFile("named.conf.options");
+    }
+    
+    public void installBind() throws IOException, JSchException{
+        this.sendSSHCommand("apt-get update;apt-get dist-upgrade;apt-get install bind9;");
+    }
+    
+
+    
     public void configureOpenDKIM() throws IOException, JSchException{
         this.sendSSHCommand("cd /etc/opendkim/keys;opendkim-genkey -s mail -d " + this.remoteHost + ";chown opendkim:opendkim mail.txt; chown opendkim:opendkim mail.private;openssl pkcs8 -topk8 -inform PEM -outform DER -in /etc/opendkim/keys/mail.private -nocrypt | base64 -w 0 > /etc/opendkim/keys/mail.private.der;sed -i 's/mail._domainkey/mail._domainkey." + this.remoteHost + "./g' /etc/opendkim/keys/mail.txt;echo \"*@" + this.remoteHost + " mail._domainkey." + this.remoteHost + "\" > /etc/opendkim/SigningTable; echo \"mail._domainkey." + this.remoteHost + " " + this.remoteHost + ":mail:/etc/opendkim/keys/mail.private\" > /etc/opendkim/KeyTable;echo -e \"127.0.0.1\nlocalhost\n" + this.remoteHostIPAddress + "\n" + this.remoteHost + "\n\" > /etc/opendkim/TrustedHosts;echo \"" + this.readFile("opendkim.conf") + "\" > /etc/opendkim.conf;service opendkim restart;");
     }
@@ -186,19 +261,50 @@ public class PocketMailSession {
         this.sendSSHCommand("postconf -e defer_transports=; postfix reload; postqueue -f;");
     }
     
-    public void prepareMessage() throws Exception{
-        //MessengerSetting messengerSetting = UMTController.getMessengerSetting();
-        //Campaign campaign = UMTController.getCampaign(messengerSetting.getCurrentCampaignId());
-        //EmailProvider emailProvider = UMTController.getEmailProvider(emailProviderId);
-        ArrayList<EmailSubscriber> emailSubscribers = new ArrayList<EmailSubscriber>();
+    public void loadQueue() throws Exception{
+        MessengerSetting messengerSetting = this.getMessengerSetting();
+        Campaign campaign = this.getCampaign(messengerSetting.getCurrentCampaignId());
+        ArrayList<EmailProvider> emailProviders = this.getEmailProviders();
+        //EmailProvider emailProvider = this.getEmailProvider(emailProviderId);
+        //ArrayList<EmailSubscriber> emailSubscribers = new ArrayList<EmailSubscriber>();
+        //emailSubscribers = this.getEmailSubscribers(5);
         
-        this.sendMessage();
+        for(EmailProvider emailProvider : emailProviders){
+            this.loadMessagesByEmailProvider(emailProvider, campaign);
+        }
+        
+        
+    }
+
+
+    private static MessengerSetting getMessengerSetting() throws Exception {
+        Gson gson = new Gson();
+        return gson.fromJson(sendPost("http://universalmessenger.net/", "controller=MessengerSettingController&action=get&api_key=" + KEY), MessengerSetting.class);
     }
     
-    public static EmailSubscriber getEmailSubscriber(int emailSubscriberId) throws Exception{
+    private static Campaign getCampaign(int campaignId) throws Exception {
         Gson gson = new Gson();
-        return gson.fromJson(sendPost("http://universalmessenger.net/", "controller=EmailSubscriberController&action=getById&api_key=" + KEY + "&id=" + emailSubscriberId), EmailSubscriber.class);
+        return gson.fromJson(sendPost("http://universalmessenger.net/", "controller=CampaignController&action=getById&id=" + campaignId + "&api_key=" + KEY), Campaign.class);
     }
+   
+    public ArrayList<EmailProvider> getEmailProviders() throws Exception{
+        Gson gson = new Gson();
+        Type type = new TypeToken<ArrayList<EmailProvider>>(){}.getType();
+        ArrayList<EmailProvider> emailProviders = new ArrayList<EmailProvider>(); //gson.fromJson(sendPost("http://universalmessenger.net/", "controller=EmailSubscriberController&action=getNextFromQueue&api_key=" + KEY ), ArrayList.class);
+        //System.out.println("Request: http://universalmessenger.net/?controller=EmailProviderController&action=get&api_key=" + KEY);
+        //System.out.println("Response: " + sendPost("http://universalmessenger.net/", "controller=EmailProviderController&action=get&api_key=" + KEY ));
+        emailProviders = gson.fromJson(sendPost("http://universalmessenger.net/", "controller=EmailProviderController&action=get&api_key=" + KEY ), type);
+        return emailProviders;
+    }
+    
+    public ArrayList<EmailSubscriber> getEmailSubscribers(int emailProviderId, int limit) throws Exception{
+        Gson gson = new Gson();
+        ArrayList<EmailSubscriber> emailSubscribers = new ArrayList<EmailSubscriber>(); //gson.fromJson(sendPost("http://universalmessenger.net/", "controller=EmailSubscriberController&action=getNextFromQueue&api_key=" + KEY ), ArrayList.class);
+        emailSubscribers = gson.fromJson(sendPost("http://universalmessenger.net/", "controller=EmailProviderController&action=getNextFromQueueByEmailProviderId&emailProviderId=" + emailProviderId + "&limit=" + limit + "&api_key=" + KEY ), emailSubscribers.getClass());
+        return emailSubscribers;
+    }
+
+    
     
     public static String sendPost(String urlString, String parameterString) throws Exception {
         URL url = new URL(urlString);
@@ -231,8 +337,49 @@ public class PocketMailSession {
 
     }
     
+    public void loadMessagesByEmailProvider(EmailProvider emailProvider, Campaign campaign) throws Exception{
+        ArrayList<EmailSubscriber> emailSubscribers = new ArrayList<EmailSubscriber>();
+        
+        
+        if(!this.doTest){
+            int sendCounter = 0;
+            this.getEmailSubscribers(emailProvider.getId(), this.limit);
+            for(EmailSubscriber emailSubscriber : emailSubscribers){
+                this.sendMessage(emailProvider, campaign, emailSubscriber.getEmailAddress(), emailSubscriber.getId());
+                sendCounter++;
+                if((sendCounter % this.seedEvery) == 0 ){
+                    if(emailProvider.getSeedAccount() != null){
+                        if(!emailProvider.getSeedAccount().isEmpty()){
+                            this.sendMessage(emailProvider, campaign, emailProvider.getSeedAccount(), 0);
+                        }
+                    }
+                }
+            }
+        }
+        else{
+            if(emailProvider.getSeedAccount() != null){
+                if(!emailProvider.getSeedAccount().isEmpty()){
+                    this.sendMessage(emailProvider, campaign, emailProvider.getSeedAccount(), 0);
+                }
+            }
+            
+            
+        }
+        
+        
+        
+        
+        
+    }
     
-    public void sendMessage() throws InvalidKeySpecException, Exception{
+    
+    public void sendMessage(EmailProvider emailProvider, Campaign campaign, String recipient, int emailSubscriberId) throws InvalidKeySpecException, Exception{
+        //MessengerSetting messengerSetting = this.getMessengerSetting();
+        //Campaign campaign = this.getCampaign(messengerSetting.getCurrentCampaignId());
+        //EmailProvider emailProvider = this.getEmailProvider(emailProviderId);
+        
+        //emailSubscribers = this.getEmailSubscribers(5);
+        
         Properties props = new Properties();
         props.put("mail.smtp.localhost", "localhost");
         //props.put("mail.smtp.localaddress", transmitter.getAddress());
@@ -250,7 +397,7 @@ public class PocketMailSession {
         String senderFirstName = "Admin";
         String senderLastName = "Test";
         
-        String recipient = "turtle.rawrior11@yahoo.com";
+        //String recipient = "turtle.rawrior11@yahoo.com";
 
 
         try {
@@ -274,7 +421,7 @@ public class PocketMailSession {
             
             //sets from: header
             InternetAddress[] fromAddresses = new InternetAddress[1];
-            fromAddresses[0] = new InternetAddress(sender, senderFirstName + " " + senderLastName);
+            fromAddresses[0] = new InternetAddress(sender, campaign.getFriendlyFrom());
             message.addFrom(fromAddresses);
             
             //sets reply-to: header
@@ -283,8 +430,8 @@ public class PocketMailSession {
             message.setReplyTo(replyToAddresses);
 
             message.addRecipient(Message.RecipientType.TO, new InternetAddress( recipient ));
-            message.setSubject("test subject");
-            message.setContent("just a test", "text/html");
+            message.setSubject(campaign.getSubject());
+            message.setContent(campaign.generateEmailCreative(this.remoteHost, 0, 0, emailSubscriberId), "text/html");
 
             Transport.send(message);
 
@@ -325,6 +472,8 @@ public class PocketMailSession {
             throw new RuntimeException(e);
         }
     }
+
+    
     
     
     

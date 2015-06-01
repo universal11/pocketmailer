@@ -27,6 +27,8 @@ public class PocketMailer {
         String remoteHost = "";
         String remoteUser = "";
         String remotePassword = "";
+        int seedEvery = 0;
+        int limit = 0;
         boolean doTest = false;
         
         for(int i=0; i < args.length; i++){
@@ -41,6 +43,12 @@ public class PocketMailer {
                 case "--remote_password":
                     remotePassword = args[(i + 1)];
                     break;
+                case "--limit":
+                    limit = Integer.parseInt(args[(i + 1)]);
+                    break;
+                case "--seed_every":
+                    seedEvery = Integer.parseInt(args[(i + 1)]);
+                    break;
                 case "--test":
                     doTest = true;
                     break;
@@ -54,7 +62,7 @@ public class PocketMailer {
             PocketMailSession pocketMailSession = new PocketMailSession();
             
             try {
-                pocketMailSession.init(remoteHost, remoteUser, remotePassword, doTest);
+                pocketMailSession.init(remoteHost, remoteUser, remotePassword, limit, seedEvery, doTest);
                 pocketMailSession.start();
             } catch (JSchException | IOException ex) {
                 Logger.getLogger(PocketMailer.class.getName()).log(Level.SEVERE, null, ex);

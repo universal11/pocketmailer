@@ -1,0 +1,10 @@
+zone "[#hostname#]" {
+        type master;
+        file "/etc/bind/zones/[#host#].db";
+        };
+
+# This is the zone definition for reverse DNS.
+zone "[#host_in_reverse_order#].in-addr.arpa" {
+     type master;
+     file "/etc/bind/zones/[#host#].in-addr.arpa";
+};

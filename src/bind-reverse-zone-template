@@ -1,0 +1,13 @@
+$TTL    604800
+@ IN SOA [#hostname#]. admin.[#hostname#]. (
+                        2006081401;
+                        28800; 
+                        604800;
+                        604800;
+                        86400 
+)
+
+
+                     IN    NS     [#hostname#].
+
+25                    IN    PTR    [#hostname#].
